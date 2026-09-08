@@ -13,7 +13,7 @@ import type { User } from '@n8n/db';
 import { ProjectRepository } from '@n8n/db';
 import { Service } from '@n8n/di';
 import { Cipher, InstanceSettings } from 'n8n-core';
-import { mkdir, mkdtemp, rename, rm, stat } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { BadRequestError } from '@/errors/response-errors/bad-request.error';
@@ -49,6 +49,7 @@ import { GitConnection } from './database/entities/git-connection.entity';
 import { GitConnectionProjectRepository } from './database/repositories/git-connection-project.repository';
 import { GitConnectionRepository } from './database/repositories/git-connection.repository';
 import { GitConnectionsGitService } from './git-connections-git.service';
+import { WorkingCopyUpdater, type SelectivePushOptions } from './working-copy-updater';
 
 /**
  * Subfolder of the working copy that holds the n8n-managed export. Keeping it
@@ -98,6 +99,7 @@ export class GitConnectionsService {
 		private readonly n8nPackagesService: N8nPackagesService,
 		private readonly cipher: Cipher,
 		private readonly instanceSettings: InstanceSettings,
+		private readonly workingCopy: WorkingCopyUpdater,
 		private readonly logger: Logger,
 	) {
 		this.logger = this.logger.scoped('git-connections');
@@ -265,6 +267,124 @@ export class GitConnectionsService {
 
 			return { connectionId, counts: exportResult.counts, commitSha };
 		} finally {
+			await rm(stagingFolder, { recursive: true, force: true });
+		}
+	}
+
+	/**
+	 * Push selected workflows of one project and their dependencies to the
+	 * branch. Unselected workflows stay as-is, and so do the projects and
+	 * folders the branch already holds: a selective push creates a container,
+	 * never renames one, so nothing moves that the user did not select.
+	 */
+	async pushSelection(
+		connectionId: string,
+		actor: User,
+		input: PushGitConnectionDto,
+		selection: SelectivePushOptions,
+	): Promise<GitConnectionPushResultDto> {
+		const connection = await this.getEntity(connectionId);
+		const { branchName } = connection;
+		if (!branchName) throw new BadRequestError('A branch name is required to push');
+
+		this.workingCopy.validateSelection(selection);
+		await this.assertProjectLinked(connectionId, selection.projectId);
+
+		const rootFolder = this.rootFolder(connectionId);
+		if (!(await this.gitService.hasWorkingCopy(rootFolder))) {
+			throw new BadRequestError(
+				'This Git connection repository is not cloned. Clone it before pushing.',
+			);
+		}
+
+		const credentials = await this.decryptCredentials(connection);
+
+		const repositoryFolder = path.join(rootFolder, 'repository');
+		const exportFolder = path.join(repositoryFolder, EXPORT_SUBFOLDER);
+
+		const isFirstPush = !(await this.exportedWorkingCopyExists(exportFolder));
+		if (isFirstPush) {
+			await mkdir(exportFolder, { recursive: true });
+		}
+
+		const branchState = isFirstPush ? {} : await this.workingCopy.readBranchState(exportFolder);
+		this.workingCopy.assertDeletionsOnBranch(branchState, selection);
+		this.workingCopy.assertNoCrossProjectMoves(branchState, selection);
+
+		const stagingFolder = await mkdtemp(path.join(repositoryFolder, `.${EXPORT_SUBFOLDER}-`));
+		const prePushBackup = `${exportFolder}.pre-selection`;
+		let backedUp = false;
+		let keepPrePushBackup = false;
+
+		try {
+			await rm(prePushBackup, { recursive: true, force: true });
+			await cp(exportFolder, prePushBackup, { recursive: true, verbatimSymlinks: true });
+			backedUp = true;
+
+			// The exporter does the selecting: it writes the selected workflows and
+			// what they need, so nothing has to be filtered out afterwards.
+			const { manifest: staging, counts } = await this.n8nPackagesService.exportPackageToDirectory(
+				{
+					user: actor,
+					projectIds: [selection.projectId],
+					projectWorkflowIds: selection.workflowIds,
+					includeVariableValues: true,
+					canExportVariableValues: true,
+					includeTags: true,
+					// A sub-workflow nobody selected stays a reference. Failing here would
+					// block a push whose sub-workflow the branch already holds.
+					missingWorkflowDependencyPolicy: MissingWorkflowDependencyPolicy.ReferenceOnly,
+					workflowVersionPolicy: WorkflowVersionPolicy.Latest,
+				},
+				{ targetDir: stagingFolder },
+			);
+
+			await this.workingCopy.applySelection(
+				exportFolder,
+				stagingFolder,
+				staging,
+				branchState,
+				selection,
+			);
+
+			const { commitSha, head } = await this.gitService.commitAndPush({
+				connection,
+				credentials,
+				rootFolder,
+				branchName,
+				author: this.commitAuthor(actor),
+				commitMessage: input.commitMessage,
+				force: input.force ?? false,
+				stagePathspec: EXPORT_SUBFOLDER,
+			});
+
+			connection.baseCommit = head;
+			await this.repository.save(connection);
+
+			return { connectionId, counts, commitSha };
+		} catch (error) {
+			if (backedUp) {
+				await rm(exportFolder, { recursive: true, force: true }).catch((restoreError: unknown) => {
+					this.logger.warn('Failed to remove the incomplete selection after a failed push', {
+						exportFolder,
+						error: restoreError,
+					});
+				});
+				try {
+					await rename(prePushBackup, exportFolder);
+				} catch (restoreError: unknown) {
+					keepPrePushBackup = true;
+					this.logger.warn(
+						'Failed to restore the export from the pre-selection copy. The copy is at the backup path.',
+						{ exportFolder, backupFolder: prePushBackup, error: restoreError },
+					);
+				}
+			}
+			throw error;
+		} finally {
+			if (!keepPrePushBackup) {
+				await rm(prePushBackup, { recursive: true, force: true });
+			}
 			await rm(stagingFolder, { recursive: true, force: true });
 		}
 	}
@@ -580,6 +700,13 @@ export class GitConnectionsService {
 		const connection = await this.repository.findOneBy({ id });
 		if (!connection) throw new NotFoundError('Git connection not found');
 		return connection;
+	}
+
+	private async assertProjectLinked(connectionId: string, projectId: string): Promise<void> {
+		const link = await this.gitConnectionProjectRepository.findByProjectId(projectId);
+		if (!link || link.gitConnectionId !== connectionId) {
+			throw new BadRequestError('The project is not linked to this Git connection');
+		}
 	}
 
 	private rootFolder(id: string) {

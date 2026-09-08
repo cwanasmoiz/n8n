@@ -46,8 +46,8 @@ import {
 	WorkflowVersionPolicy,
 	type ExportPackageEventCounts,
 	type ExportPackageRequest,
+	type ExportPackageDirectoryResult,
 	type ExportPackageResult,
-	type ExportPackageSummary,
 	type ImportPackageRequest,
 	type ImportRequest,
 	type ImportResult,
@@ -65,6 +65,7 @@ import type { PackageRequirements } from './spec/requirements.schema';
 
 interface WrittenExport {
 	counts: ExportPackageEventCounts;
+	manifest: PackageManifest;
 	workflowIds: string[];
 	folderIds: string[];
 	projectIds: string[];
@@ -122,11 +123,11 @@ export class N8nPackagesService {
 	async exportPackageToDirectory(
 		request: ExportPackageRequest,
 		target: { targetDir: string },
-	): Promise<ExportPackageSummary> {
+	): Promise<ExportPackageDirectoryResult> {
 		const writer = new DirectoryPackageWriter(target.targetDir);
 		const result = await this.writeExport(writer, request);
 		await writer.finalize();
-		return { counts: result.counts };
+		return { counts: result.counts, manifest: result.manifest };
 	}
 
 	private async writeExport(
@@ -355,6 +356,7 @@ export class N8nPackagesService {
 
 		return {
 			counts,
+			manifest,
 			workflowIds: allWorkflowsInPackage.map(({ id }) => id),
 			folderIds: allFolders.map(({ id }) => id),
 			projectIds: allProjects.map(({ id }) => id),
