@@ -58,3 +58,21 @@ export const appVersionSchema = z.object({
 });
 
 export type AppVersion = z.infer<typeof appVersionSchema>;
+
+/**
+ * Outcome of asking n8n to run the app's dev server in a thread's sandbox.
+ * `ready` carries a capability URL under `/apps-preview/<token>/`.
+ */
+export const appPreviewStatusSchema = z.discriminatedUnion('status', [
+	z.object({ status: z.literal('ready'), url: z.string(), expiresAt: z.string().datetime() }),
+	z.object({ status: z.literal('starting') }),
+	z.object({ status: z.literal('no-source') }),
+	z.object({ status: z.literal('unsupported'), reason: z.enum(['provider', 'port-route']) }),
+	z.object({
+		status: z.literal('unavailable'),
+		reason: z.enum(['sandbox', 'start-failed']),
+		log: z.string().max(4096).optional(),
+	}),
+]);
+
+export type AppPreviewStatus = z.infer<typeof appPreviewStatusSchema>;

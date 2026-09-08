@@ -187,6 +187,8 @@ export {
 	type AppVersion,
 	appThemeSchema,
 	type AppTheme,
+	appPreviewStatusSchema,
+	type AppPreviewStatus,
 } from './schemas/app.schema';
 
 export {
@@ -411,6 +413,8 @@ export {
 	InstanceAiEnsureThreadRequest,
 	instanceAiAgentAttachmentSchema,
 	instanceAiAppAttachmentSchema,
+	instanceAiAppPreviewDiagnosticSchema,
+	instanceAiAppPreviewDiagnosticsAttachmentSchema,
 	instanceAiAttachmentSchema,
 	instanceAiFileAttachmentSchema,
 	instanceAiNodesAttachmentSchema,
@@ -509,6 +513,8 @@ export type {
 	InstanceAiEvent,
 	InstanceAiAgentAttachment,
 	InstanceAiAppAttachment,
+	InstanceAiAppPreviewDiagnostic,
+	InstanceAiAppPreviewDiagnosticsAttachment,
 	InstanceAiAttachment,
 	InstanceAiSendMessageResponse,
 	InstanceAiToolCallState,
