@@ -1,3 +1,4 @@
+import type { AppPreviewStatus } from '@n8n/api-types';
 import { makeRestApiRequest } from '@n8n/rest-api-client';
 import type { IRestApiContext } from '@n8n/rest-api-client';
 
@@ -58,6 +59,21 @@ export const applyAppThemeApi = async (
 
 export const deleteAppApi = async (context: IRestApiContext, projectId: string, appId: string) => {
 	await makeRestApiRequest(context, 'DELETE', `/projects/${projectId}/apps/${appId}`);
+};
+
+/** Starts (or keeps alive) the app's dev server in the thread's sandbox. */
+export const ensureAppPreviewApi = async (
+	context: IRestApiContext,
+	projectId: string,
+	appId: string,
+	threadId: string,
+) => {
+	return await makeRestApiRequest<AppPreviewStatus>(
+		context,
+		'POST',
+		`/projects/${projectId}/apps/${appId}/preview`,
+		{ threadId },
+	);
 };
 
 export const fetchPagesApi = async (context: IRestApiContext, projectId: string, appId: string) => {
