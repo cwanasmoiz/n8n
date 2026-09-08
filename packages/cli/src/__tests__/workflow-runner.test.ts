@@ -3,6 +3,7 @@ import { GlobalConfig } from '@n8n/config';
 import {
 	type User,
 	type ExecutionEntity,
+	type IExecutionBase,
 	GLOBAL_OWNER_ROLE,
 	Project,
 	ExecutionRepository,
@@ -139,8 +140,8 @@ describe('processError', () => {
 		const finalizeExecution = vi.spyOn(Container.get(ActiveExecutions), 'finalizeExecution');
 
 		vi.spyOn(executionRepository, 'findSingleExecution')
-			.mockResolvedValueOnce(mock<ExecutionEntity>({ status: 'running', finished: false }))
-			.mockResolvedValue(mock<ExecutionEntity>({ status: 'success', finished: true }));
+			.mockResolvedValueOnce(mock<IExecutionBase>({ status: 'running', finished: false }))
+			.mockResolvedValue(mock<IExecutionBase>({ status: 'success', finished: true }));
 
 		globalConfig.executions.mode = 'queue';
 		vi.useFakeTimers();
