@@ -123,9 +123,9 @@ import { ForbiddenError } from '@/errors/response-errors/forbidden.error';
 import { EventService } from '@/events/event.service';
 import { InstanceAiBuilderDelegateAdapterService } from '@/modules/agents/instance-ai-builder-delegate.adapter';
 import { userHasScopes } from '@/permissions.ee/check-access';
+import { Push } from '@/push';
 import { Publisher } from '@/scaling/pubsub/publisher.service';
 import type { PubSubCommandMap } from '@/scaling/pubsub/pubsub.event-map';
-import { Push } from '@/push';
 import { AiService } from '@/services/ai.service';
 import { InstanceWriteAccessService } from '@/services/instance-write-access.service';
 import { ProxyTokenManager } from '@/services/proxy-token-manager';
@@ -137,6 +137,7 @@ import { resolveAgentPreviewHandoff } from './agent-preview-handoff';
 import { composeLocalMcpServers } from './browser/composite-local-mcp-server';
 import { InstanceAiBrowserSessionService } from './browser/instance-ai-browser-session.service';
 import { CanvasNodeContextFlagGate } from './canvas-node-context-flag-gate';
+import { resolveConnectableComputerUseChannels } from './computer-use-availability';
 import { dropRejectedAttachmentsFromHistory } from './drop-rejected-attachments';
 import { EvalThreadCredentialAllowlistService } from './eval/thread-credential-allowlist.service';
 import { DurableEventLog } from './event-bus/durable-event-log';
@@ -2383,6 +2384,8 @@ export class InstanceAiService {
 			conversationHistoryEnabled,
 			nodeUsageEnabled,
 			folderExplorationEnabled,
+			computerUseExperimentEnabled,
+			browserUseExperimentEnabled,
 		} = await this.adapterService.resolveExperimentGates(user);
 		// One scoped reader backs both the tool and the first-turn hint.
 		const conversationHistory = conversationHistoryEnabled
@@ -2485,6 +2488,17 @@ export class InstanceAiService {
 			createCredentialPermissionMode: context.permissions?.createCredential,
 		});
 
+		// Which Computer Use entries the client renders for this user. The prompt names
+		// these entries, so the backend has to agree with the client or the agent sends
+		// the user after a control they cannot see (INS-1293).
+		const connectableComputerUseChannels = resolveConnectableComputerUseChannels({
+			localGatewayDisabledGlobally,
+			browserUseEnabledGlobally,
+			computerUseExperimentEnabled,
+			browserUseExperimentEnabled,
+		});
+		context.connectableComputerUseChannels = connectableComputerUseChannels;
+
 		// Compute gateway status for the system prompt. The direct browser
 		// session contributes a `browser` capability even without the daemon.
 		if (gatewayMcpServer || browserMcpServer) {
@@ -2506,7 +2520,9 @@ export class InstanceAiService {
 				status: 'connected',
 				capabilities: [...capabilities],
 			};
-		} else if (localGatewayDisabledGlobally && !browserUseEnabledGlobally) {
+		} else if (connectableComputerUseChannels.length === 0) {
+			// Nothing the client would render for this user, so the prompt must not
+			// mention Computer Use at all (INS-1293).
 			context.localGatewayStatus = { status: 'disabledGlobally' };
 		} else {
 			context.localGatewayStatus = {
@@ -3496,7 +3512,7 @@ export class InstanceAiService {
 	 * `startExecuteRun` so the promise is registered with `inFlightExecutions`
 	 * and shutdown can drain it before the DB closes.
 	 */
-	// eslint-disable-next-line complexity
+
 	/** Thread provenance for the trace. Best-effort by construction: a failed
 	 *  metadata read must not take the run with it — the trace just loses a
 	 *  label it would have been nice to have. */
