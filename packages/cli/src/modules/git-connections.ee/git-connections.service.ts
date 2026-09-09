@@ -327,6 +327,7 @@ export class GitConnectionsService {
 					includeVariableValues: true,
 					canExportVariableValues: true,
 					includeTags: true,
+					includeArchivedWorkflows: true,
 					// A sub-workflow nobody selected stays a reference. Failing here would
 					// block a push whose sub-workflow the branch already holds.
 					missingWorkflowDependencyPolicy: MissingWorkflowDependencyPolicy.ReferenceOnly,

@@ -609,6 +609,7 @@ describe('GitConnectionsService (credential state machine)', () => {
 				expect.objectContaining({
 					projectIds: ['p1'],
 					projectWorkflowIds: ['w1', 'w2'],
+					includeArchivedWorkflows: true,
 					missingWorkflowDependencyPolicy: MissingWorkflowDependencyPolicy.ReferenceOnly,
 				}),
 				expect.any(Object),
