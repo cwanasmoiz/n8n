@@ -4,6 +4,7 @@ import {
 	type User,
 	type ExecutionEntity,
 	type IExecutionBase,
+	type IExecutionResponse,
 	GLOBAL_OWNER_ROLE,
 	Project,
 	ExecutionRepository,
@@ -41,6 +42,7 @@ import { ActiveExecutions } from '@/active-executions';
 import { ExecutionNotFoundError } from '@/errors/execution-not-found-error';
 import { MaxStalledCountError } from '@/errors/max-stalled-count.error';
 import * as ExecutionLifecycleHooks from '@/execution-lifecycle/execution-lifecycle-hooks';
+import { ExecutionPersistence } from '@/executions/execution-persistence';
 import {
 	CredentialsPermissionChecker,
 	WorkflowPreExecute,
@@ -135,13 +137,32 @@ describe('processError', () => {
 
 	test('processError does not fail the execution when a stalled-count error precedes the success write', async () => {
 		const workflow = await createWorkflow({}, owner);
-		const execution = await createExecution({ status: 'running', finished: false }, workflow);
+		const execution = await createExecution({ status: 'waiting', finished: false }, workflow);
 		const executionRepository = Container.get(ExecutionRepository);
-		const finalizeExecution = vi.spyOn(Container.get(ActiveExecutions), 'finalizeExecution');
+		const activeExecutions = Container.get(ActiveExecutions);
+		const finalizeExecution = vi.spyOn(activeExecutions, 'finalizeExecution');
+
+		await activeExecutions.add(
+			{ executionMode: 'webhook', workflowData: workflow },
+			{ executionId: execution.id, expectedStatus: 'waiting' },
+		);
+		const postExecutePromise = activeExecutions.getPostExecutePromise(execution.id);
+
+		const successData = createRunExecutionData({
+			resultData: { runData: { Start: [] }, lastNodeExecuted: 'Start' },
+		});
 
 		vi.spyOn(executionRepository, 'findSingleExecution')
 			.mockResolvedValueOnce(mock<IExecutionBase>({ status: 'running' }))
 			.mockResolvedValue(mock<IExecutionBase>({ status: 'success' }));
+		vi.spyOn(Container.get(ExecutionPersistence), 'findSingleExecution').mockResolvedValue(
+			mock<IExecutionResponse>({
+				status: 'success',
+				finished: true,
+				mode: 'webhook',
+				data: successData,
+			}),
+		);
 
 		globalConfig.executions.mode = 'queue';
 		vi.useFakeTimers();
@@ -160,6 +181,10 @@ describe('processError', () => {
 			vi.useRealTimers();
 		}
 
+		await expect(postExecutePromise).resolves.toEqual(
+			expect.objectContaining({ status: 'success', finished: true, data: successData }),
+		);
+		expect(activeExecutions.has(execution.id)).toBe(false);
 		expect(watcher.workflowExecuteAfter).toHaveBeenCalledTimes(0);
 		expect(finalizeExecution).not.toHaveBeenCalledWith(
 			execution.id,

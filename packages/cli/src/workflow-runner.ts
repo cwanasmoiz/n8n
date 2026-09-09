@@ -158,6 +158,38 @@ export class WorkflowRunner {
 				);
 				if (executionWithoutData?.status === 'success') {
 					// false positive, execution was successful
+					const fullExecutionData = await this.executionPersistence.findSingleExecution(
+						executionId,
+						{
+							includeData: true,
+							unflattenData: true,
+						},
+					);
+
+					const successRunData: IRun = fullExecutionData
+						? {
+								finished: fullExecutionData.finished,
+								mode: fullExecutionData.mode,
+								startedAt: fullExecutionData.startedAt,
+								stoppedAt: fullExecutionData.stoppedAt,
+								status: fullExecutionData.status,
+								waitTill: fullExecutionData.waitTill,
+								data: fullExecutionData.data,
+								storedAt: fullExecutionData.storedAt,
+							}
+						: {
+								finished: executionWithoutData.finished,
+								mode: executionWithoutData.mode,
+								startedAt: executionWithoutData.startedAt,
+								stoppedAt: executionWithoutData.stoppedAt ?? new Date(),
+								status: executionWithoutData.status,
+								waitTill: executionWithoutData.waitTill,
+								data: createRunExecutionData({ resultData: { runData: {} } }),
+								storedAt: executionWithoutData.storedAt,
+							};
+
+					this.activeExecutions.finalizeExecution(executionId, successRunData);
+
 					return;
 				}
 
