@@ -307,10 +307,6 @@ export class GitConnectionsService {
 			await mkdir(exportFolder, { recursive: true });
 		}
 
-		const branchState = isFirstPush ? {} : await this.workingCopy.readBranchState(exportFolder);
-		this.workingCopy.assertDeletionsOnBranch(branchState, selection);
-		this.workingCopy.assertNoCrossProjectMoves(branchState, selection);
-
 		const stagingFolder = await mkdtemp(path.join(repositoryFolder, `.${EXPORT_SUBFOLDER}-`));
 		const prePushBackup = `${exportFolder}.pre-selection`;
 		let backedUp = false;
@@ -339,13 +335,7 @@ export class GitConnectionsService {
 				{ targetDir: stagingFolder },
 			);
 
-			await this.workingCopy.applySelection(
-				exportFolder,
-				stagingFolder,
-				staging,
-				branchState,
-				selection,
-			);
+			await this.workingCopy.applySelection(exportFolder, stagingFolder, staging, selection);
 
 			const { commitSha, head } = await this.gitService.commitAndPush({
 				connection,
