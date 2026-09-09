@@ -27,7 +27,20 @@ type PlainCredentials =
 	| { type: 'ssh'; privateKey: string }
 	| { type: 'https'; username: string; password: string };
 
-const BASE_GIT_CONFIG = ['core.autocrlf=false'];
+type BranchOptions = {
+	connection: GitConnection;
+	credentials: PlainCredentials;
+	rootFolder: string;
+	branchName: string;
+};
+
+const BASE_GIT_OPTIONS = {
+	binary: 'git',
+	maxConcurrentProcesses: 1,
+	trimmed: false,
+	timeout: { block: GIT_COMMAND_STALL_TIMEOUT_MS },
+	config: ['core.autocrlf=false'],
+} satisfies Partial<SimpleGitOptions>;
 
 @Service()
 export class GitConnectionsGitService {
@@ -244,12 +257,7 @@ export class GitConnectionsGitService {
 		credentials,
 		rootFolder,
 		branchName,
-	}: {
-		connection: GitConnection;
-		credentials: PlainCredentials;
-		rootFolder: string;
-		branchName: string;
-	}): Promise<void> {
+	}: BranchOptions): Promise<void> {
 		const { repositoryFolder, sshDir } = this.connectionPaths(rootFolder);
 		await this.withGit(
 			{ connection, credentials, repoDir: repositoryFolder, sshDir },
@@ -267,16 +275,11 @@ export class GitConnectionsGitService {
 		credentials,
 		rootFolder,
 		branchName,
-	}: {
-		connection: GitConnection;
-		credentials: PlainCredentials;
-		rootFolder: string;
-		branchName: string;
-	}): Promise<{ head: string }> {
+	}: BranchOptions): Promise<{ head: string }> {
 		const { repositoryFolder } = this.connectionPaths(rootFolder);
 		try {
 			await this.fetchBranch({ connection, credentials, rootFolder, branchName });
-			const git = this.localGit(repositoryFolder);
+			const git = simpleGit({ ...BASE_GIT_OPTIONS, baseDir: repositoryFolder });
 			await git.raw(['reset', '--hard', `origin/${branchName}`]);
 			const head = (await git.revparse(['HEAD'])).trim();
 			return { head };
@@ -291,18 +294,16 @@ export class GitConnectionsGitService {
 		rootFolder,
 		branchName,
 		pathspecs,
-	}: {
-		connection: GitConnection;
-		credentials: PlainCredentials;
-		rootFolder: string;
-		branchName: string;
-		pathspecs: string[];
-	}): Promise<string> {
+	}: BranchOptions & { pathspecs: string[] }): Promise<string> {
 		const { repositoryFolder, sshDir } = this.connectionPaths(rootFolder);
 		try {
+			const git = simpleGit({ ...BASE_GIT_OPTIONS, baseDir: repositoryFolder });
 			try {
 				await this.fetchBranch({ connection, credentials, rootFolder, branchName });
 			} catch (error) {
+				const cached = await git.branch(['--remotes', '--list', `origin/${branchName}`]);
+				if (cached.all.length > 0) throw error;
+
 				const branches = await this.withGit(
 					{ connection, credentials, repoDir: repositoryFolder, sshDir },
 					async (git) => await git.listRemote(['--heads', 'origin']),
@@ -310,9 +311,14 @@ export class GitConnectionsGitService {
 				if (!branches.trim()) return '';
 				throw error;
 			}
-			const git = this.localGit(repositoryFolder);
-			const commit = await git.revparse(['--verify', `refs/remotes/origin/${branchName}^{commit}`]);
-			return await git.raw(['ls-tree', '-r', '-z', commit.trim(), '--', ...pathspecs]);
+			return await git.raw([
+				'ls-tree',
+				'-r',
+				'-z',
+				`refs/remotes/origin/${branchName}`,
+				'--',
+				...pathspecs,
+			]);
 		} catch (error) {
 			throw this.mapGitError(error, { connectionId: connection.id, branchName });
 		}
@@ -337,17 +343,6 @@ export class GitConnectionsGitService {
 		};
 	}
 
-	private localGit(repoDir: string): SimpleGit {
-		return simpleGit({
-			baseDir: repoDir,
-			binary: 'git',
-			maxConcurrentProcesses: 1,
-			trimmed: false,
-			timeout: { block: GIT_COMMAND_STALL_TIMEOUT_MS },
-			config: [...BASE_GIT_CONFIG],
-		});
-	}
-
 	// Configure credentials per operation and remove temporary SSH key material afterwards.
 	private async withGit<T>(
 		{
@@ -366,12 +361,10 @@ export class GitConnectionsGitService {
 		operation: (git: SimpleGit) => Promise<T>,
 	) {
 		await mkdir(repoDir, { recursive: true });
-		const options: Partial<SimpleGitOptions> = {
+		const options = {
+			...BASE_GIT_OPTIONS,
 			baseDir: repoDir,
-			binary: 'git',
-			maxConcurrentProcesses: 1,
-			trimmed: false,
-			timeout: { block: GIT_COMMAND_STALL_TIMEOUT_MS },
+			config: [...BASE_GIT_OPTIONS.config, ...extraConfig],
 		};
 		let temporaryFolder: string | undefined;
 
@@ -379,7 +372,7 @@ export class GitConnectionsGitService {
 			let git: SimpleGit;
 			if (credentials.type === 'https') {
 				const config = [
-					...BASE_GIT_CONFIG,
+					...BASE_GIT_OPTIONS.config,
 					...buildHttpsGitConfig(connection.repositoryUrl, credentials),
 					...extraConfig,
 				];
@@ -402,7 +395,6 @@ export class GitConnectionsGitService {
 				});
 				git = simpleGit({
 					...options,
-					config: [...BASE_GIT_CONFIG, ...extraConfig],
 					unsafe: { allowUnsafeSshCommand: true },
 				})
 					.env('GIT_SSH_COMMAND', sshCommand)
